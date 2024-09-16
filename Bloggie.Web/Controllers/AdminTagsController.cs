@@ -1,20 +1,23 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Bloggie.Web.Models.ViewModels;
-using Bloggie.Web.Data;
 using Bloggie.Web.Models.Domain;
-using Microsoft.EntityFrameworkCore;
+using Bloggie.Web.Repositories;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace Bloggie.Web.Controllers
 {
     public class AdminTagsController : Controller
     {
-        private BloggieDbContext bloggieDbContext;
-        public AdminTagsController(BloggieDbContext bloggieDbContext) 
-        { 
-           this.bloggieDbContext = bloggieDbContext;
-        }    
+        private ITagRepository tagRepository;
+
+        public AdminTagsController(ITagRepository tagRepository)
+        {
+            this.tagRepository = tagRepository;
+        }
 
         [HttpGet]
+        [Authorize(Roles = "Admin")]
         [ActionName("Add")]
         public IActionResult Add()
         {
@@ -22,9 +25,15 @@ namespace Bloggie.Web.Controllers
         }
 
         [HttpPost]
+        [Authorize(Roles = "Admin")]
         [ActionName("Add")]
         public async Task<IActionResult> Add(AddTagRequest addTagRequest)
         {
+            ValidateAddTagRequest(addTagRequest);
+            if (!ModelState.IsValid)
+            {
+                return View();
+            }
             // Mapping addTagRequest to Tag domain model
             var tag = new Tag
             {
@@ -32,29 +41,54 @@ namespace Bloggie.Web.Controllers
                 DisplayName = addTagRequest.DisplayName
             };
 
-            await bloggieDbContext.Tags.AddAsync(tag);
-            await bloggieDbContext.SaveChangesAsync();
+            await tagRepository.AddAsync(tag);
 
             //return View("Add");
             return RedirectToAction("List");
         }
 
         [HttpGet]
+        [Authorize(Roles = "Admin")]
         [ActionName("List")]
-        public async Task<IActionResult> List()
+        public async Task<IActionResult> List(string? searchQuery, 
+                                              string? sortBy, 
+                                              string? sortDirection, 
+                                              int pagesize = 3,
+                                              int pageNumber = 1)
         {
-            //USe DB Context to read the tags
-            var tags = await bloggieDbContext.Tags.ToListAsync();
+            var totalRecords = await tagRepository.CountAsync();
+            var totalPages = Math.Ceiling((decimal)totalRecords/pagesize);
 
-            return View(tags); 
+            if(pageNumber > totalPages)
+            {
+                pageNumber--;
+            }
+
+            if (pageNumber < 1)
+            {
+                pageNumber++;
+            }
+
+            ViewBag.TotalPages = totalPages;
+            ViewBag.SearchQuery = searchQuery;
+            ViewBag.SortBy = sortBy;
+            ViewBag.SortDirection = sortDirection;
+            ViewBag.Pagesize = pagesize;
+            ViewBag.PageNumber = pageNumber;
+
+            //USe DB Context to read the tags
+            var tags = await tagRepository.GetAllAsync(searchQuery, sortBy, sortDirection, pageNumber, pagesize);
+
+            return View(tags);
         }
 
         [HttpGet]
+        [Authorize(Roles = "Admin")]
         [ActionName("Edit")]
         public async Task<IActionResult> Edit(Guid id)
         {
             //var Tag = bloggieDbContext.Tags.Find(id);
-            var tag = await bloggieDbContext.Tags.FirstOrDefaultAsync(x => x.Id == id);
+            var tag = await tagRepository.GetAsync(id);
 
             if (tag != null)
             {
@@ -70,6 +104,7 @@ namespace Bloggie.Web.Controllers
         }
 
         [HttpPost]
+        [Authorize(Roles = "Admin")]
         [ActionName("Edit")]
         public async Task<IActionResult> Edit(EditTagRequest editTagRequest)
         {
@@ -81,33 +116,47 @@ namespace Bloggie.Web.Controllers
                 DisplayName = editTagRequest.DisplayName
             };
 
-            var existingTag = await bloggieDbContext.Tags.FindAsync(tag.Id);
-            if (existingTag != null)
+            var updatedTag = await tagRepository.UpdateAsync(tag);
+            if (updatedTag != null)
             {
-                existingTag.Name = tag.Name;
-                existingTag.DisplayName = tag.DisplayName;
-                await bloggieDbContext.SaveChangesAsync();
                 //show success notification
-                return RedirectToAction("Edit", new { id = editTagRequest.Id });
             }
-            //show an error notification
-            return RedirectToAction("Edit", new {id = editTagRequest.Id});
+            else
+            {
+                //Show error message
+            }
+            return RedirectToAction("Edit", new { id = editTagRequest.Id });
         }
 
         [HttpPost]
+        [Authorize(Roles = "Admin")]
         [ActionName("Delete")]
         public async Task<IActionResult> Delete(EditTagRequest editTagRequest)
         {
-            var tag = await bloggieDbContext.Tags.FindAsync(editTagRequest.Id);
-            if(tag != null)
+            var deletedTag = await tagRepository.DeleteAsync(editTagRequest.Id);
+            if (deletedTag != null)
             {
-                bloggieDbContext.Remove(tag); //No async for remove function
-                await bloggieDbContext.SaveChangesAsync();
-                //Show success notification
+                //Show a success notification
                 return RedirectToAction("List");
             }
-            //show an error notification
-            return RedirectToAction("Edit", new { id = editTagRequest.Id });
+            else
+            {
+                //Show an error notification.
+                return RedirectToAction("Edit", new { id = editTagRequest.Id });
+            }
+        }
+
+        private void ValidateAddTagRequest(AddTagRequest addTagRequest)
+        {
+            if (addTagRequest.Name is not null && addTagRequest.DisplayName is not null)
+            {
+                if (addTagRequest.Name == addTagRequest.DisplayName)
+                {
+                    ModelState.AddModelError("DisplayName", "Name and Display Name cannot be same.");
+                }
+            }
         }
     }
 }
+
+
